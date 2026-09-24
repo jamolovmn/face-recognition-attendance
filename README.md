@@ -1,0 +1,174 @@
+# Face Recognition Attendance System — PTZ cameras + AI + Nextcloud
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![OpenCV](https://img.shields.io/badge/OpenCV-YuNet%20%2B%20SFace-5C3EE8?logo=opencv&logoColor=white)
+![Nextcloud](https://img.shields.io/badge/Nextcloud-30--33-0082C9?logo=nextcloud&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+![CPU only](https://img.shields.io/badge/GPU-not%20required-lightgrey)
+
+**Open-source employee attendance system based on face recognition.** Ordinary IP / Wi-Fi PTZ cameras
+watch the office, the AI **turns and zooms the camera toward faces (ONVIF PTZ auto-tracking)**,
+recognises people from a distance and writes **who arrived, when, and in which room** to
+**Nextcloud** through a dedicated Nextcloud app with a dashboard.
+
+> 🇺🇿 O'zbek tilida: [README.uz.md](README.uz.md)
+
+- ✅ **No GPU, no cloud**: runs on a small CPU server, and faces never leave your network
+- ✅ **Commercial-friendly models**: YuNet (MIT) and SFace (Apache-2.0) from the OpenCV Model Zoo
+- ✅ **No training**: add 5–10 photos of a person to a folder and you're done
+- ✅ **PTZ auto-tracking**: centres and zooms onto unidentified faces, then returns to the door
+- ✅ **Any ONVIF / RTSP camera**, including cheap Wi-Fi PTZ cameras
+- ✅ **Nextcloud app**: daily summary (arrived / last seen / late / absent), all events, stranger alerts with snapshots, CSV export, automatic data retention
+- ✅ **Reliable**: multi-frame confirmation, per-person cooldown, disk spool when Nextcloud is offline
+
+## How it works
+
+```mermaid
+flowchart LR
+    C1[PTZ camera<br/>room 1] -- RTSP --> S
+    C2[PTZ camera<br/>room 2] -- RTSP --> S
+    subgraph S[attendance service · Docker · CPU]
+        D[YuNet<br/>face detection] --> R[SFace<br/>embedding + match]
+        R --> V[confirm N hits<br/>+ cooldown]
+        D --> P[PTZ tracker]
+    end
+    P -- ONVIF move/zoom --> C1
+    P -- ONVIF move/zoom --> C2
+    V -- OCS API + snapshot --> N[Nextcloud<br/>faceattendance app]
+    N --> U[Dashboard · CSV]
+```
+
+1. **Detect.** Each camera frame (2–3 fps, only when something moves) goes through **YuNet**.
+2. **Recognise.** Every face is aligned and turned into a 128-d **SFace** embedding, then compared (cosine similarity) with the gallery built from your photos.
+3. **Confirm.** A person must match **3 times within 4 s** before an event is written. A stranger needs 6 hits.
+4. **Track.** On PTZ cameras the tracker sends short ONVIF pulses to centre the biggest *not yet identified* face and zooms in until it is ~120 px wide. After 20 s without faces the camera returns to its home preset (point it at the door).
+5. **Log.** The event (name, room, camera, score, face snapshot) is POSTed to the Nextcloud app. The same person is logged at most once per room every 10 min. First sighting = arrival, last sighting = departure.
+
+## Requirements
+
+| | |
+|---|---|
+| Server | Any x86_64/ARM64 Linux with Docker. 2 cameras ≈ 1–1.5 CPU cores at 3 fps |
+| Cameras | RTSP stream (required) + ONVIF PTZ (optional, for tracking) |
+| Network | The server must reach the cameras' RTSP/ONVIF ports (same LAN, or a VPN such as WireGuard) |
+| Nextcloud | 30 – 33 |
+
+## Quick start
+
+```bash
+git clone https://github.com/jamolovmn/face-recognition-attendance.git
+cd face-recognition-attendance
+cp .env.example .env
+docker compose build
+```
+
+### 1. Find your camera's RTSP URL and PTZ support
+
+```bash
+docker compose run --rm attendance python -m attendance.probe 192.168.1.50 --user admin --password secret
+docker compose run --rm attendance python -m attendance.probe 192.168.1.50 --user admin --password secret --ptz-test
+```
+
+`probe` scans the common ONVIF ports and prints the device info, every stream profile with its RTSP URL (and saves a test frame), PTZ support and presets. Put the results in `.env` (`CAM_<ID>_RTSP`, `CAM_<ID>_ONVIF_PORT`, …).
+
+> Many cheap Wi-Fi cameras have ONVIF **turned off** by default. Enable it in the camera's app or web UI and set an ONVIF password.
+
+### 2. Enroll people
+
+```
+faces/
+  Ali Valiyev/        1.jpg 2.jpg 3.jpg ...
+  Dilnoza Karimova/   1.jpg 2.jpg ...
+```
+
+```bash
+docker compose run --rm attendance python -m attendance.enroll
+```
+
+Use 5–10 photos per person with different angles, lighting and glasses. The folder name is the name shown in Nextcloud. The running service reloads the gallery automatically within a minute.
+
+### 3. Install the Nextcloud app
+
+```bash
+cp -r nextcloud-app/faceattendance /path/to/nextcloud/custom_apps/
+chown -R www-data:www-data /path/to/nextcloud/custom_apps/faceattendance
+sudo -u www-data php occ app:enable faceattendance
+
+# a service account for the cameras
+sudo -u www-data php occ group:add attendance
+OC_PASS='long-random-password' sudo -E -u www-data php occ user:add --password-from-env --group attendance attendance-bot
+sudo -u www-data php occ user:auth-tokens:add attendance-bot   # -> NC_APP_PASSWORD
+```
+
+Only **admins** and members of the **`attendance`** group can open the dashboard or post events.
+Add HR / managers to that group.
+
+### 4. Run
+
+```bash
+docker compose up -d
+docker compose logs -f
+```
+
+## Configuration
+
+Everything is set through `.env`. [`.env.example`](.env.example) documents every variable. The most important ones:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CAMERAS` | – | Camera ids, e.g. `room1,room2` |
+| `CAM_<ID>_RTSP` | – | RTSP URL (use the **main** stream for distance) |
+| `CAM_<ID>_ROOM` | id | Room name shown in Nextcloud |
+| `CAM_<ID>_PTZ` | `false` | Enable ONVIF auto-tracking |
+| `CAM_<ID>_ONVIF_HOST/PORT/USER/PASS` | – | ONVIF access |
+| `CAM_<ID>_HOME_PRESET` | – | Preset to return to when idle (ONVIF home if empty) |
+| `MATCH_THRESHOLD` | `0.40` | Cosine similarity for a match (OpenCV reference: 0.363) |
+| `CONFIRM_HITS` / `CONFIRM_WINDOW_SEC` | `3` / `4` | Hits needed before logging |
+| `COOLDOWN_MIN` | `10` | Minimum minutes between two events of one person in one room |
+| `PROCESS_FPS` | `3` | Analysed frames per second per camera |
+| `UNKNOWN_EVENTS` | `true` | Log strangers with a snapshot |
+| `NC_URL`, `NC_USER`, `NC_APP_PASSWORD` | – | Nextcloud connection |
+
+Nextcloud side: `occ config:app:set faceattendance retention_days --value 90 --type integer` controls how long events and snapshots are kept (`0` = forever).
+
+## Nextcloud API
+
+```
+POST /ocs/v2.php/apps/faceattendance/api/v1/events      (OCS-APIRequest: true, basic auth)
+{ "uid": "...", "person": "Ali Valiyev" | null, "camera": "room1", "room": "Office 1",
+  "score": 0.71, "ts": 1790246135, "snapshot": "<base64 jpeg>" }
+
+GET  /ocs/v2.php/apps/faceattendance/api/v1/events?from=<unix>&to=<unix>[&person=][&room=]
+```
+
+`uid` makes the POST idempotent, so retries never create duplicates. `person=` (empty) returns only strangers.
+
+## Tips for accuracy
+
+- A face needs to be **≥ 80–110 px wide** in the frame. Optical zoom (PTZ) or a camera close to the door helps more than anything else.
+- Mount the camera at head height, facing the entrance, and avoid strong backlight from windows.
+- Too many false matches → raise `MATCH_THRESHOLD` (0.45). Known people shown as unknown → add more photos, or lower it slightly.
+- A PTZ camera zoomed on one person does not see the rest of the room. For strict attendance, a fixed camera at the door plus PTZ for the room works best.
+
+## Privacy & law
+
+Face templates are **biometric personal data**. Get written consent from employees, tell them where cameras are, keep the data on your own server (this project never sends it anywhere else) and set a retention period. The `faces/` folder and `data/` are git-ignored, so never commit them.
+
+## Project layout
+
+```
+attendance/            Python service
+  main.py              camera workers, confirmation, cooldown
+  faces.py             YuNet + SFace (OpenCV)
+  ptz.py / onvif.py    PTZ auto-tracking, dependency-free ONVIF client
+  sink.py              Nextcloud client with offline spool
+  enroll.py / probe.py CLI tools
+nextcloud-app/faceattendance/   Nextcloud app (PHP, vanilla JS, no build step)
+```
+
+## License
+
+[MIT](LICENSE). Models: YuNet (MIT), SFace (Apache-2.0) from the [OpenCV Model Zoo](https://github.com/opencv/opencv_zoo).
+
+**Keywords:** face recognition attendance system, employee attendance, time tracking, facial recognition, PTZ camera auto tracking, ONVIF, RTSP, IP camera, Nextcloud app, OpenCV, YuNet, SFace, Python, Docker, self-hosted, open source

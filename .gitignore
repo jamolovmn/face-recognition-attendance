@@ -1,0 +1,8 @@
+.env
+data/
+faces/*
+!faces/README.md
+probe_*.jpg
+__pycache__/
+*.pyc
+.venv/

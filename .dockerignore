@@ -1,0 +1,7 @@
+.git
+.env
+data
+faces
+nextcloud-app
+*.md
+__pycache__

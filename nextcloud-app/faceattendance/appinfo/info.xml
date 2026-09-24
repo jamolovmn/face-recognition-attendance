@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+	<id>faceattendance</id>
+	<name>Face Attendance</name>
+	<summary>Employee attendance from face-recognition cameras</summary>
+	<description><![CDATA[Receives arrival events from the face-recognition-attendance service (IP / PTZ cameras + AI) and shows who came and left, when, and in which room. Daily summary, snapshots, stranger alerts, CSV export and automatic data retention.]]></description>
+	<version>1.0.0</version>
+	<licence>mit</licence>
+	<author homepage="https://github.com/jamolovmn">jamolovmn</author>
+	<namespace>FaceAttendance</namespace>
+	<category>organization</category>
+	<category>tools</category>
+	<website>https://github.com/jamolovmn/face-recognition-attendance</website>
+	<bugs>https://github.com/jamolovmn/face-recognition-attendance/issues</bugs>
+	<repository>https://github.com/jamolovmn/face-recognition-attendance</repository>
+	<dependencies>
+		<php min-version="8.1"/>
+		<nextcloud min-version="30" max-version="33"/>
+	</dependencies>
+	<background-jobs>
+		<job>OCA\FaceAttendance\BackgroundJob\RetentionJob</job>
+	</background-jobs>
+	<navigations>
+		<navigation>
+			<name>Attendance</name>
+			<route>faceattendance.page.index</route>
+			<icon>app.svg</icon>
+		</navigation>
+	</navigations>
+</info>

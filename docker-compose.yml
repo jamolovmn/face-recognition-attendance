@@ -1,0 +1,10 @@
+services:
+  attendance:
+    build: .
+    image: ghcr.io/jamolovmn/face-recognition-attendance:latest
+    container_name: face-attendance
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./faces:/app/faces:ro
+      - ./data:/app/data
