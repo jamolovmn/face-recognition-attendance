@@ -45,6 +45,31 @@ flowchart LR
 4. **Track.** On PTZ cameras the tracker sends short ONVIF pulses to centre the biggest *not yet identified* face and zooms in until it is ~120 px wide. After 20 s without faces the camera returns to its home preset (point it at the door).
 5. **Log.** The event (name, room, camera, score, face snapshot) is POSTed to the Nextcloud app. The same person is logged at most once per room every 10 min. First sighting = arrival, last sighting = departure.
 
+## 24/7 on a tiny CPU budget
+
+Running a neural network on every frame all day is wasteful. The service uses a **cascade**
+so the expensive parts run only when something actually changes:
+
+| Stage | Runs when | Cost |
+|---|---|---|
+| Sub-stream (640×360) decode + motion check | always | very low |
+| Main stream decode | **keyframes only** while idle, every frame on motion | low → medium |
+| Face detection (YuNet) | motion, 3 fps; 1 fps at 640 px when "calm" | medium |
+| Face embedding (SFace) | new / unverified faces only; known faces are **tracked** and re-checked every 5 s | low |
+| Everything | outside `ACTIVE_HOURS` / `ACTIVE_DAYS` the cameras are disconnected | **0** |
+
+Measured on a 3-vCPU VPS, one 720p camera (percent of one core):
+
+| Situation | CPU |
+|---|---|
+| Empty room | **~2–3 %** |
+| Someone walks in (a few seconds) | 60–80 % |
+| People sitting in view all day (already logged) | **~6–10 %** |
+| Outside working hours | **0 %** |
+
+"Calm" = everyone in view is identified and already logged. A newcomer breaks calm within
+one keyframe interval and the full pipeline takes over.
+
 ## Requirements
 
 | | |
@@ -110,6 +135,27 @@ Add HR / managers to that group.
 docker compose up -d
 docker compose logs -f
 ```
+
+### No VPN / no public IP? Use an old Android phone
+
+If the office is behind NAT you can't open (ISP modem, CGNAT) and the router's VPN client
+doesn't allow inbound traffic, any always-on device inside the office can **dial out** to the
+server and carry the camera ports through an SSH reverse tunnel. An old Android phone with
+[Termux](https://f-droid.org/packages/com.termux/) is enough:
+
+```bash
+# on the phone (Termux), one line per camera port
+ssh -N -o ServerAliveInterval=20 -o ExitOnForwardFailure=yes \
+  -R 127.0.0.1:11554:192.168.1.232:554 -R 127.0.0.1:11899:192.168.1.232:8899 \
+  camtunnel@your-server
+```
+
+On the server create a dedicated user that may **only** open those forwards
+(`AllowTcpForwarding remote`, `PermitListen 127.0.0.1:11554 ...`, `ForceCommand nologin`,
+key with `restrict,port-forwarding`). Then point `.env` at `127.0.0.1:<port>`. The ONVIF
+client rewrites the camera's LAN service addresses to the tunnel address automatically, and
+`probe --rtsp-port` does the same for RTSP. Install
+[Termux:Boot](https://f-droid.org/packages/com.termux.boot/) so the tunnel starts after a reboot.
 
 ## Configuration
 

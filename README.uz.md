@@ -21,6 +21,23 @@ AI **kamerani yuzga qarab buradi va zoom qiladi** (ONVIF PTZ), odamni uzoqdan ta
 4. **Kuzatish.** PTZ kamera hali tanilmagan eng katta yuzni markazga oladi va ~120 px bo'lguncha zoom qiladi. 20 soniya yuz bo'lmasa, uy holatiga (eshikka) qaytadi.
 5. **Yozish.** Hodisa (ism, xona, kamera, moslik, yuz rasmi) Nextcloud'ga yuboriladi. Bir odam bir xonada 10 daqiqada ko'pi bilan bir marta yoziladi. Kundagi birinchi ko'rinishi "keldi", oxirgisi "ketdi" hisoblanadi.
 
+## 24/7 ishlash, lekin CPU kam sarflanadi
+
+AI har bir kadrda kun bo'yi ishlasa, resurs behuda ketadi. Shuning uchun tizim **kaskad** usulida ishlaydi:
+- **Doim:** faqat kichik oqim (640×360) va harakat sensori ishlaydi.
+- **Harakat bo'lganda:** katta oqim to'liq ochiladi, yuz qidiriladi.
+- **Hamma tanilgan va yozib bo'lingan bo'lsa ("tinch" rejim):** sekundiga 1 marta, kichik o'lchamda tekshiriladi. Tanilgan yuz joyi bo'yicha kuzatiladi va 5 soniyada bir marta qayta tekshiriladi.
+- **Ish vaqtidan tashqarida** (`ACTIVE_HOURS`, `ACTIVE_DAYS`): kameralar uziladi, CPU 0%.
+
+3 vCPU serverda, bitta kamera bilan o'lchangan natijalar (bir yadroga nisbatan):
+
+| Holat | CPU |
+|---|---|
+| Bo'sh xona | **~2–3%** |
+| Kimdir kirdi (bir necha soniya) | 60–80% |
+| Odamlar kun bo'yi kadrda o'tiradi | **~6–10%** |
+| Ish vaqtidan tashqari | **0%** |
+
 ## Talablar
 
 | | |
@@ -84,6 +101,10 @@ Davomatni faqat **adminlar** va **`attendance`** guruhi a'zolari ko'ra oladi. HR
 docker compose up -d
 docker compose logs -f
 ```
+
+### VPN yoki oq IP yo'qmi? Eski Android telefon yetadi
+
+Ofis provayder modemi orqasida bo'lsa va routerning VPN mijozi kiruvchi ulanishga ruxsat bermasa, ofis ichidagi doim yoqiq istalgan qurilma serverga **o'zi ulanib**, kamera portlarini SSH tunnel orqali uzatib turishi mumkin. Buning uchun [Termux](https://f-droid.org/packages/com.termux/) o'rnatilgan eski Android telefon kifoya. Telefon qayta yonganda tunnel o'zi ishga tushishi uchun [Termux:Boot](https://f-droid.org/packages/com.termux.boot/) ilovasini ham o'rnating. Serverda faqat shu portlarni ocha oladigan alohida foydalanuvchi yaratiladi (batafsil: [README.md](README.md)).
 
 ## Sozlamalar
 

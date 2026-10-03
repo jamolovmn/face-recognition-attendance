@@ -10,6 +10,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import cv2
 import numpy as np
@@ -17,7 +18,7 @@ import numpy as np
 from . import config as cfgmod
 from .camera import LatestFrameReader
 from .config import CameraConfig, Config
-from .faces import FaceEngine, crop_snapshot
+from .faces import Face, FaceEngine, crop_snapshot
 from .gallery import Gallery
 from .ptz import PtzTracker
 from .sink import NextcloudSink
@@ -44,6 +45,21 @@ class GalleryHolder:
         if m and m != self._mtime:
             self._mtime = m
             self.gallery = Gallery.load(self.path)
+
+
+@dataclass
+class Track:
+    """A known face we already identified; followed by position so we can skip re-embedding."""
+    box: tuple[int, int, int, int]
+    name: str
+    verified_at: float
+    seen_at: float
+
+    def matches(self, box: tuple[int, int, int, int]) -> bool:
+        x, y, w, h = box
+        tx, ty, tw, th = self.box
+        dist = ((x + w / 2) - (tx + tw / 2)) ** 2 + ((y + h / 2) - (ty + th / 2)) ** 2
+        return dist ** 0.5 < 0.6 * max(w, tw) and 0.6 < (w / max(tw, 1)) < 1.6
 
 
 @dataclass
@@ -77,12 +93,19 @@ class CameraWorker(threading.Thread):
         super().__init__(name=f"cam-{cam.id}", daemon=True)
         self.cam, self.cfg = cam, cfg
         self.gallery, self.sink, self.cooldowns = gallery, sink, cooldowns
-        self.reader = LatestFrameReader(cam.id, cam.rtsp)
+        # Main stream: only keyframes while idle, every frame while something happens.
+        self.reader = LatestFrameReader(cam.id, cam.rtsp, full=not cfg.motion_gate)
+        # Optional low-res stream, decoded fully (cheap) just to watch for motion.
+        self.motion_reader = LatestFrameReader(cam.id + "-sub", cam.rtsp_sub) if cam.rtsp_sub else None
         self.ptz = PtzTracker(cam, cfg) if cam.ptz and cam.onvif_host else None
         self.hits: dict[str, deque] = defaultdict(deque)
         self.unknowns: list[UnknownCluster] = []
         self._prev_small: np.ndarray | None = None
         self._last_face_at = 0.0
+        self._active_until = 0.0
+        self._last_motion_seq = -1
+        self._tracks: list[Track] = []
+        self._calm = False  # everyone in view is identified and already logged
 
     # -------------------------------------------------------------------
     def _has_motion(self, frame: np.ndarray) -> bool:
@@ -123,17 +146,38 @@ class CameraWorker(threading.Thread):
 
     def _process(self, frame: np.ndarray, engine: FaceEngine) -> None:
         now = time.monotonic()
-        faces = engine.analyze(frame)
         gallery = self.gallery.gallery
         cooldown = self.cfg.cooldown_min * 60
         pending: set[int] = set()
+        faces: list[Face] = []
+        tracks: list[Track] = []
+        calm = True
 
-        for i, face in enumerate(faces):
+        # Forget tracks not seen for a while (person left / camera moved).
+        self._tracks = [t for t in self._tracks if now - t.seen_at < 3.0]
+
+        # When calm we only need to notice changes, so a cheaper low-res detection is enough.
+        rows = engine.detect(frame, self.cfg.calm_detect_width if self._calm else None)
+        for i, row in enumerate(rows):
+            box = tuple(int(v) for v in row[:4])
+            track = next((t for t in self._tracks if t.matches(box)), None)
+            if track is not None and now - track.verified_at < self.cfg.reverify_sec \
+                    and self.cooldowns.active((track.name, self.cam.room), cooldown, now):
+                # Same known person, same place, already logged: skip the expensive embedding.
+                track.box, track.seen_at = box, now
+                tracks.append(track)
+                faces.append(Face(box=box, score=float(row[14]), embedding=None))
+                continue
+
+            face = Face(box=box, score=float(row[14]), embedding=engine.embed(frame, row))
+            faces.append(face)
             name, score = gallery.match(face.embedding)
             if name is not None and score >= self.cfg.match_threshold:
                 key = (name, self.cam.room)
                 if self.cooldowns.active(key, cooldown, now):
+                    tracks.append(Track(box=box, name=name, verified_at=now, seen_at=now))
                     continue  # already logged recently - PTZ can move on
+                calm = False
                 pending.add(i)
                 if self._confirmed(self.hits[name], now, self.cfg.confirm_hits):
                     self.cooldowns.mark(key, now)
@@ -143,35 +187,98 @@ class CameraWorker(threading.Thread):
                         snapshot=crop_snapshot(frame, face.box) if self.cfg.snapshot else None,
                     )
             else:
+                calm = False
                 pending.add(i)
                 # Grey zone (close to threshold) is ignored: likely a known person at a bad angle.
                 if self.cfg.unknown_events and score < self.cfg.match_threshold - 0.1:
                     self._handle_unknown(frame, face, now)
 
+        self._tracks = tracks
+        self._calm = bool(faces) and calm
         if faces:
             self._last_face_at = now
         if self.ptz:
             h, w = frame.shape[:2]
             self.ptz.update(faces, w, h, pending)
 
+    def _readers(self) -> list[LatestFrameReader]:
+        return [r for r in (self.reader, self.motion_reader) if r is not None]
+
+    def _watch_motion(self, now: float) -> None:
+        """Keep the worker 'active' for ACTIVE_HOLD_SEC after any motion or face."""
+        if not self.cfg.motion_gate:
+            self._active_until = float("inf")
+            return
+        source = self.motion_reader or self.reader
+        seq, frame = source.read()
+        if frame is not None and seq != self._last_motion_seq:
+            self._last_motion_seq = seq
+            if self._has_motion(frame):
+                if now >= self._active_until:
+                    log.debug("[%s] motion -> active", self.cam.id)
+                self._active_until = now + self.cfg.active_hold_sec
+        if now - self._last_face_at < self.cfg.active_hold_sec:
+            self._active_until = max(self._active_until, self._last_face_at + self.cfg.active_hold_sec)
+
     def run(self) -> None:
         engine = FaceEngine(self.cfg.models_dir, self.cfg.detect_width, self.cfg.detect_score, self.cfg.min_face_px)
-        self.reader.start()
+        for r in self._readers():
+            r.start()
         period = 1.0 / max(self.cfg.process_fps, 0.1)
+        calm_period = 1.0 / max(self.cfg.calm_fps, 0.1)
         last_seq = -1
-        log.info("[%s] started (room=%s, ptz=%s)", self.cam.id, self.cam.room, bool(self.ptz))
+        paused = False
+        stats_at = time.monotonic()
+        log.info("[%s] started (room=%s, ptz=%s, substream=%s)", self.cam.id, self.cam.room, bool(self.ptz), bool(self.motion_reader))
         while True:
             t0 = time.monotonic()
+
+            if not in_schedule(self.cfg) and self.cfg.off_hours_mode == "off":
+                if not paused:
+                    log.info("[%s] outside working hours - cameras disconnected", self.cam.id)
+                    for r in self._readers():
+                        r.pause()
+                    paused = True
+                time.sleep(30)
+                continue
+            if paused:
+                log.info("[%s] working hours - reconnecting", self.cam.id)
+                for r in self._readers():
+                    r.resume()
+                paused = False
+
+            if t0 - stats_at >= 60:
+                stats_at = t0
+                log.debug("[%s] decoded/min: %s", self.cam.id, ", ".join(f"{r.name}={r.decoded}" for r in self._readers()))
+                for r in self._readers():
+                    r.decoded = 0
+            self._watch_motion(t0)
+            active = t0 < self._active_until
+            # Calm (everyone in view already identified): keyframes are enough to notice a newcomer.
+            self.reader.set_full(active and not self._calm)
+
             seq, frame = self.reader.read()
-            if frame is not None and seq != last_seq:
+            if active and frame is not None and seq != last_seq:
                 last_seq = seq
-                recent_face = t0 - self._last_face_at < 3.0
-                if not self.cfg.motion_gate or self._has_motion(frame) or recent_face:
-                    try:
-                        self._process(frame, engine)
-                    except Exception:  # noqa: BLE001
-                        log.exception("[%s] processing error", self.cam.id)
-            time.sleep(max(0.0, period - (time.monotonic() - t0)))
+                try:
+                    self._process(frame, engine)
+                except Exception:  # noqa: BLE001
+                    log.exception("[%s] processing error", self.cam.id)
+            elif self.ptz is not None:
+                self.ptz.update([], 1, 1, set())  # lets the idle -> home-position timer run
+            wait = calm_period if (active and self._calm) else period
+            time.sleep(max(0.0, wait - (time.monotonic() - t0)))
+
+
+def in_schedule(cfg: Config, now: datetime | None = None) -> bool:
+    now = now or datetime.now()
+    if now.isoweekday() not in cfg.active_days:
+        return False
+    if cfg.active_hours is None:
+        return True
+    start, end = cfg.active_hours
+    minute = now.hour * 60 + now.minute
+    return start <= minute < end if start <= end else (minute >= start or minute < end)
 
 
 def main() -> None:

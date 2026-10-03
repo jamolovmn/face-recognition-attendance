@@ -9,6 +9,7 @@ import base64
 import datetime as dt
 import hashlib
 import os
+from urllib.parse import urlsplit, urlunsplit
 import xml.etree.ElementTree as ET
 
 from xml.sax.saxutils import escape
@@ -76,11 +77,21 @@ class Onvif:
     # ---- Discovery -----------------------------------------------------
     def connect(self) -> "Onvif":
         root = self._call(self.device_url, "<tds:GetCapabilities><tds:Category>All</tds:Category></tds:GetCapabilities>")
-        self.media_url = root.findtext(".//{*}Media/{*}XAddr")
-        self.ptz_url = root.findtext(".//{*}PTZ/{*}XAddr")
+        self.media_url = self._rebase(root.findtext(".//{*}Media/{*}XAddr"))
+        self.ptz_url = self._rebase(root.findtext(".//{*}PTZ/{*}XAddr"))
         if not self.media_url:
             raise OnvifError("camera did not report a Media service")
         return self
+
+    def _rebase(self, url: str | None) -> str | None:
+        """Cameras report service URLs with their own LAN address. Behind a tunnel or
+        port-forward that address is unreachable, so point them at the host:port we used."""
+        if not url:
+            return url
+        parts = urlsplit(url.strip())
+        if parts.hostname == self.host:
+            return url.strip()
+        return urlunsplit(parts._replace(netloc=f"{self.host}:{self.port}"))
 
     def device_info(self) -> dict[str, str]:
         root = self._call(self.device_url, "<tds:GetDeviceInformation/>")

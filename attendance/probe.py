@@ -46,6 +46,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, help="ONVIF port (default: try common ports)")
     ap.add_argument("--user")
     ap.add_argument("--password")
+    ap.add_argument("--rtsp-port", type=int, help="RTSP port to use instead of the one the camera reports (tunnels)")
     ap.add_argument("--ptz-test", action="store_true", help="pan right, then left, then go home")
     args = ap.parse_args()
 
@@ -81,6 +82,10 @@ def main() -> int:
             print("    stream uri error:", e)
             continue
         print(f"    RTSP: {uri}")
+        parts = urlsplit(uri)
+        if parts.hostname != args.host or args.rtsp_port:
+            uri = urlunsplit(parts._replace(netloc=f"{args.host}:{args.rtsp_port or parts.port or 554}"))
+            print(f"    via:  {uri}")
         out_dir = os.path.dirname(os.environ.get("GALLERY_PATH", "/app/data/gallery.npz"))
         out_dir = out_dir if os.path.isdir(out_dir) else "."
         try_rtsp(with_credentials(uri, args.user, args.password), os.path.join(out_dir, f"probe_{args.host}_{i}.jpg"))

@@ -5,6 +5,8 @@ services:
     container_name: face-attendance
     restart: unless-stopped
     env_file: .env
+    # host network: reaches cameras via VPN routes or SSH tunnels on 127.0.0.1
+    network_mode: host
     volumes:
       - ./faces:/app/faces:ro
       - ./data:/app/data

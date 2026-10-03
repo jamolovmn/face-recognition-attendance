@@ -19,7 +19,7 @@ SFACE_FILE = "face_recognition_sface_2021dec.onnx"
 class Face:
     box: tuple[int, int, int, int]  # x, y, w, h in full-resolution pixels
     score: float
-    embedding: np.ndarray  # L2-normalised, shape (128,)
+    embedding: np.ndarray | None  # L2-normalised (128,); None when identity came from tracking
 
     @property
     def center(self) -> tuple[float, float]:
@@ -38,10 +38,10 @@ class FaceEngine:
         )
         self.recognizer = cv2.FaceRecognizerSF.create(os.path.join(models_dir, SFACE_FILE), "")
 
-    def detect(self, frame: np.ndarray) -> list[np.ndarray]:
+    def detect(self, frame: np.ndarray, width: int | None = None) -> list[np.ndarray]:
         """Return raw YuNet rows (15 values) scaled to full-resolution coordinates."""
         h, w = frame.shape[:2]
-        scale = min(1.0, self.detect_width / w)
+        scale = min(1.0, (width or self.detect_width) / w)
         small = cv2.resize(frame, (int(w * scale), int(h * scale))) if scale < 1.0 else frame
         self.detector.setInputSize((small.shape[1], small.shape[0]))
         _, rows = self.detector.detect(small)

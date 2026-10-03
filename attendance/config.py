@@ -25,11 +25,37 @@ def _int(name: str, default: int) -> int:
     return int(_env(name, str(default)))
 
 
+def _hhmm(value: str) -> int:
+    h, m = value.strip().split(":")
+    return int(h) * 60 + int(m)
+
+
+def _hours(value: str | None) -> tuple[int, int] | None:
+    """'07:00-20:00' -> (420, 1200). Ranges over midnight ('22:00-06:00') are allowed."""
+    if not value:
+        return None
+    start, end = value.split("-")
+    return _hhmm(start), _hhmm(end)
+
+
+def _days(value: str | None) -> frozenset[int]:
+    """'1-5' or '1,2,3,4,5,6' -> ISO weekdays."""
+    days: set[int] = set()
+    for part in (value or "1-7").split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            days.update(range(int(a), int(b) + 1))
+        elif part.strip():
+            days.add(int(part))
+    return frozenset(d for d in days if 1 <= d <= 7)
+
+
 @dataclass
 class CameraConfig:
     id: str
     rtsp: str
     room: str
+    rtsp_sub: str | None = None  # low-res stream for cheap motion watching
     ptz: bool = False
     onvif_host: str | None = None
     onvif_port: int = 80
@@ -53,8 +79,17 @@ class Config:
     confirm_hits: int = 3
     confirm_window_sec: float = 4.0
     process_fps: float = 3.0
+    calm_fps: float = 1.0
+    calm_detect_width: int = 640
+    reverify_sec: float = 5.0
     motion_gate: bool = True
     motion_threshold: float = 0.004
+    active_hold_sec: float = 6.0
+
+    # Schedule
+    active_hours: tuple[int, int] | None = None  # minutes since midnight (start, end); None = always
+    active_days: frozenset[int] = frozenset(range(1, 8))  # ISO weekdays, 1 = Monday
+    off_hours_mode: str = "off"  # off = disconnect cameras, watch = keep working
 
     # Events
     cooldown_min: float = 10.0
@@ -91,6 +126,7 @@ def load() -> Config:
                 id=cid,
                 rtsp=rtsp,
                 room=_env(p + "ROOM", cid) or cid,
+                rtsp_sub=_env(p + "RTSP_SUB"),
                 ptz=_bool(p + "PTZ"),
                 onvif_host=_env(p + "ONVIF_HOST"),
                 onvif_port=_int(p + "ONVIF_PORT", 80),
@@ -112,8 +148,15 @@ def load() -> Config:
         confirm_hits=_int("CONFIRM_HITS", 3),
         confirm_window_sec=_float("CONFIRM_WINDOW_SEC", 4.0),
         process_fps=_float("PROCESS_FPS", 3.0),
+        calm_fps=_float("CALM_FPS", 1.0),
+        calm_detect_width=_int("CALM_DETECT_WIDTH", 640),
+        reverify_sec=_float("REVERIFY_SEC", 5.0),
         motion_gate=_bool("MOTION_GATE", True),
         motion_threshold=_float("MOTION_THRESHOLD", 0.004),
+        active_hold_sec=_float("ACTIVE_HOLD_SEC", 6.0),
+        active_hours=_hours(_env("ACTIVE_HOURS")),
+        active_days=_days(_env("ACTIVE_DAYS", "1-7")),
+        off_hours_mode=(_env("OFF_HOURS_MODE", "off") or "off").lower(),
         cooldown_min=_float("COOLDOWN_MIN", 10.0),
         unknown_events=_bool("UNKNOWN_EVENTS", True),
         unknown_cooldown_min=_float("UNKNOWN_COOLDOWN_MIN", 5.0),
