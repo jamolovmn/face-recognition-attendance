@@ -18,12 +18,15 @@ import numpy as np
 
 from . import config as cfgmod
 from .camera import LatestFrameReader
+from .collect import FaceCollector, FaceSync, FolderMirror
 from .config import CameraConfig, Config
+from .enroll import enroll_engine
 from .faces import Face, FaceEngine, crop_snapshot
 from .gallery import Gallery
 from .lease import Lease
 from .ptz import PtzTracker
 from .sink import NextcloudSink
+from .webdav import WebDav
 
 log = logging.getLogger("attendance")
 
@@ -91,9 +94,10 @@ class Cooldowns:
 class CameraWorker(threading.Thread):
     UNKNOWN_SAME_PERSON = 0.50  # similarity above which two unknown faces are "the same stranger"
 
-    def __init__(self, cam: CameraConfig, cfg: Config, gallery: GalleryHolder, sink: NextcloudSink, cooldowns: Cooldowns, lease: Lease):
+    def __init__(self, cam: CameraConfig, cfg: Config, gallery: GalleryHolder, sink: NextcloudSink, cooldowns: Cooldowns, lease: Lease,
+                 collector: FaceCollector | None = None):
         super().__init__(name=f"cam-{cam.id}", daemon=True)
-        self.cam, self.cfg, self.lease = cam, cfg, lease
+        self.cam, self.cfg, self.lease, self.collector = cam, cfg, lease, collector
         self.gallery, self.sink, self.cooldowns = gallery, sink, cooldowns
         # Main stream: only keyframes while idle, every frame while something happens.
         self.reader = LatestFrameReader(cam.id, cam.rtsp, full=not cfg.motion_gate)
@@ -192,8 +196,11 @@ class CameraWorker(threading.Thread):
                 calm = False
                 pending.add(i)
                 # Grey zone (close to threshold) is ignored: likely a known person at a bad angle.
-                if self.cfg.unknown_events and score < self.cfg.match_threshold - 0.1:
-                    self._handle_unknown(frame, face, now)
+                if score < self.cfg.match_threshold - 0.1:
+                    if self.collector is not None:
+                        self.collector.offer(frame, row, face.embedding)
+                    if self.cfg.unknown_events:
+                        self._handle_unknown(frame, face, now)
 
         self._tracks = tracks
         self._calm = bool(faces) and calm
@@ -299,8 +306,17 @@ def main() -> None:
     sink = NextcloudSink(cfg)
     cooldowns = Cooldowns()
     lease = Lease(cfg)
+
+    dav = WebDav(cfg) if sink.enabled and (cfg.nc_people_dir or cfg.collect_faces) else None
+    new_mirror = FolderMirror(dav, cfg.nc_new_faces_dir, cfg.new_faces_dir) if dav and cfg.collect_faces else None
+    collector = FaceCollector(cfg, new_mirror, cfg.new_faces_dir) if cfg.collect_faces else None
+    if dav is not None:
+        FaceSync(cfg, dav, gallery, collector, new_mirror).start()
+    elif collector is not None:
+        collector.reload(enroll_engine(cfg.models_dir))
+
     for cam in cfg.cameras:
-        CameraWorker(cam, cfg, gallery, sink, cooldowns, lease).start()
+        CameraWorker(cam, cfg, gallery, sink, cooldowns, lease, collector).start()
 
     while True:
         time.sleep(60)

@@ -81,6 +81,14 @@ docker compose run --rm attendance python -m attendance.enroll
 
 Har bir odamdan 5–10 ta rasm oling: har xil burchak, yorug'lik, ko'zoynakli va ko'zoynaksiz. Papka nomi Nextcloud'da ko'rinadigan ism bo'ladi. Ishlab turgan servis galereyani bir daqiqa ichida o'zi qayta yuklaydi.
 
+### Rasmlarni kameraning o'zi yig'sin
+
+Rasmlarni qo'lda olish o'rniga `.env`da `COLLECT_FACES=true` qiling va `NC_PEOPLE_DIR` hamda `NC_NEW_FACES_DIR`ni yozing:
+
+1. Servis ishlayotganda har bir notanish yuz **aniq, to'g'ri qaragan va yetarlicha katta** bo'lsa, o'xshashligi bo'yicha guruhlanadi. Har bir odamdan 20 tagacha har xil rasm Nextcloud'dagi `Yangi odamlar/person-OYKUN-SSDDSS/` papkasiga tushadi.
+2. Papkani oching, yomon rasmlarni o'chiring, so'ng **papka nomini odamning ismiga o'zgartirib, `Xodimlar/` ichiga ko'chiring**. Bir odamga ikkita papka ochilib qolgan bo'lsa, ularni bitta papkaga birlashtiring.
+3. Bir daqiqa ichida har bir kompyuter `Xodimlar/` papkasini yuklab oladi, rasmlarni qayta o'qiydi va bu odamni taniy boshlaydi. Asosiy va zaxira kompyuterda xodimlar ro'yxati doim bir xil bo'ladi.
+
 ### 3. Nextcloud ilovasini o'rnatish
 
 ```bash

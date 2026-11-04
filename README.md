@@ -113,6 +113,14 @@ docker compose run --rm attendance python -m attendance.enroll
 
 Use 5–10 photos per person with different angles, lighting and glasses. The folder name is the name shown in Nextcloud. The running service reloads the gallery automatically within a minute.
 
+### Let the camera collect the photos for you
+
+Instead of taking photos by hand, set `COLLECT_FACES=true` and `NC_PEOPLE_DIR` / `NC_NEW_FACES_DIR`:
+
+1. While the service runs, every unknown face that is **sharp, frontal and big enough** is grouped by similarity, and up to 20 varied photos per person are saved to `New faces/person-MMDD-HHMMSS/` in Nextcloud.
+2. Open the folder, delete bad photos, **rename it to the person's name and move it into `People/`**. Two folders of the same person can simply be merged.
+3. Within a minute every node downloads `People/`, re-enrolls and recognizes that person. Both failover PCs always share the same people.
+
 ### 3. Install the Nextcloud app
 
 ```bash
@@ -228,6 +236,7 @@ attendance/            Python service
   ptz.py / onvif.py    PTZ auto-tracking, dependency-free ONVIF client
   sink.py              Nextcloud client with offline spool
   lease.py             active/standby failover between nodes
+  collect.py           automatic photo collection + Nextcloud people folder sync
   enroll.py / probe.py CLI tools
 nextcloud-app/faceattendance/   Nextcloud app (PHP, vanilla JS, no build step)
 windows/               Windows installer (scheduled task, no Docker)

@@ -25,19 +25,12 @@ def imread_unicode(path: str):
     return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    cfg = cfgmod.load()
-    engine = FaceEngine(cfg.models_dir, detect_width=1280, score=0.7, min_face_px=30)
-
-    if not os.path.isdir(cfg.faces_dir):
-        print(f"faces directory not found: {cfg.faces_dir}", file=sys.stderr)
-        return 1
-
+def build_gallery(faces_dir: str, engine: FaceEngine, log: logging.Logger = logging.getLogger("enroll")) -> Gallery:
+    """One embedding per photo in faces_dir/<Person>/*.jpg."""
     names: list[str] = []
     embs: list[np.ndarray] = []
-    for person in sorted(os.listdir(cfg.faces_dir)):
-        pdir = os.path.join(cfg.faces_dir, person)
+    for person in sorted(os.listdir(faces_dir)):
+        pdir = os.path.join(faces_dir, person)
         if not os.path.isdir(pdir) or person.startswith("."):
             continue
         count = 0
@@ -47,26 +40,39 @@ def main() -> int:
             path = os.path.join(pdir, fname)
             img = imread_unicode(path)
             if img is None:
-                logging.warning("cannot read %s", path)
+                log.warning("cannot read %s", path)
                 continue
             rows = engine.detect(img)
             if not rows:
-                logging.warning("no face found: %s", path)
+                log.warning("no face found: %s", path)
                 continue
             if len(rows) > 1:
-                logging.info("%d faces in %s - using the largest", len(rows), path)
+                log.info("%d faces in %s - using the largest", len(rows), path)
             row = max(rows, key=lambda r: r[2] * r[3])
             names.append(person)
             embs.append(engine.embed(img, row))
             count += 1
         level = logging.INFO if count >= 3 else logging.WARNING
-        logging.log(level, "%-30s %d photo(s)%s", person, count, "" if count >= 3 else "  <- add more photos")
+        log.log(level, "%-30s %d photo(s)%s", person, count, "" if count >= 3 else "  <- add more photos")
+    return Gallery(names, np.stack(embs) if embs else np.zeros((0, 128), np.float32))
 
-    if not names:
+
+def enroll_engine(models_dir: str) -> FaceEngine:
+    return FaceEngine(models_dir, detect_width=1280, score=0.7, min_face_px=30)
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    cfg = cfgmod.load()
+    if not os.path.isdir(cfg.faces_dir):
+        print(f"faces directory not found: {cfg.faces_dir}", file=sys.stderr)
+        return 1
+    gallery = build_gallery(cfg.faces_dir, enroll_engine(cfg.models_dir))
+    if not gallery.names:
         print("no faces enrolled", file=sys.stderr)
         return 1
-    Gallery(names, np.stack(embs)).save(cfg.gallery_path)
-    print(f"saved {len(names)} embeddings for {len(set(names))} people -> {cfg.gallery_path}")
+    gallery.save(cfg.gallery_path)
+    print(f"saved {len(gallery.names)} embeddings for {len(set(gallery.names))} people -> {cfg.gallery_path}")
     print("restart the service (or it reloads automatically within a minute)")
     return 0
 

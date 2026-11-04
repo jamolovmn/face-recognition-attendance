@@ -26,7 +26,10 @@ class Gallery:
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        np.savez(path, names=np.array(self.names), embeddings=self.embeddings)
+        # Write next to it and swap, so a running service never loads a half-written file
+        tmp = path + ".tmp.npz"
+        np.savez(tmp, names=np.array(self.names, dtype=str), embeddings=self.embeddings)
+        os.replace(tmp, path)
 
     def match(self, embedding: np.ndarray) -> tuple[str | None, float]:
         if not self.names:
