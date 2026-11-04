@@ -73,11 +73,26 @@ foreach ($m in $models.GetEnumerator()) {
 }
 
 Write-Host '[4/5] Settings (.env)' -ForegroundColor Cyan
+# Explorer makes it awkward to name a file ".env", so a downloaded env.txt is accepted too
+if (-not (Test-Path '.env') -and (Test-Path 'env.txt')) { Move-Item 'env.txt' '.env' }
 if (-not (Test-Path '.env')) {
     Copy-Item '.env.example' '.env'
     Write-Host '      .env created - fill it in, save, and run this script again.' -ForegroundColor Yellow
     Start-Process notepad.exe '.env' -Wait
     exit 1
+}
+$envText = Get-Content '.env' -Raw
+if ($envText -match '(?m)^FAILOVER=(true|1|yes|on)\s*$') {
+    $current = if ($envText -match '(?m)^NODE_PRIORITY=(\d+)') { $Matches[1] } else { '1' }
+    $answer = Read-Host "      This PC: 1 = main, 2 = backup [$current]"
+    if ($answer -match '^\d+$' -and $answer -ne $current) {
+        if ($envText -match '(?m)^NODE_PRIORITY=') {
+            $envText = $envText -replace '(?m)^NODE_PRIORITY=\d+', "NODE_PRIORITY=$answer"
+        } else {
+            $envText = $envText.TrimEnd() + "`r`nNODE_PRIORITY=$answer`r`n"
+        }
+        [IO.File]::WriteAllText((Join-Path $Root '.env'), $envText)
+    }
 }
 
 Write-Host '[5/5] Service (starts at boot, restarts on failure)' -ForegroundColor Cyan
