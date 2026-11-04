@@ -68,4 +68,17 @@ class ApiController extends OCSController {
 		$limit = max(1, min($limit, 10000));
 		return new DataResponse($this->mapper->findRange($from, $to, $person, $room, $limit));
 	}
+
+	/** Heartbeat of a camera node; tells it whether it should run the cameras. */
+	#[NoAdminRequired]
+	#[ApiRoute(verb: 'POST', url: '/api/v1/lease')]
+	public function lease(string $node, int $priority = 1, int $ttl = 45): DataResponse {
+		if (!$this->service->canAccess($this->userSession->getUser())) {
+			return new DataResponse(['message' => 'forbidden'], Http::STATUS_FORBIDDEN);
+		}
+		if (!preg_match('/^[A-Za-z0-9_.-]{1,64}$/', $node)) {
+			return new DataResponse(['message' => 'invalid node'], Http::STATUS_BAD_REQUEST);
+		}
+		return new DataResponse($this->service->lease($node, max(0, $priority), max(15, min($ttl, 600))));
+	}
 }

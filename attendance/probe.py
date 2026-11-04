@@ -86,7 +86,7 @@ def main() -> int:
         if parts.hostname != args.host or args.rtsp_port:
             uri = urlunsplit(parts._replace(netloc=f"{args.host}:{args.rtsp_port or parts.port or 554}"))
             print(f"    via:  {uri}")
-        out_dir = os.path.dirname(os.environ.get("GALLERY_PATH", "/app/data/gallery.npz"))
+        out_dir = os.path.dirname(os.environ.get("GALLERY_PATH", "data/gallery.npz"))
         out_dir = out_dir if os.path.isdir(out_dir) else "."
         try_rtsp(with_credentials(uri, args.user, args.password), os.path.join(out_dir, f"probe_{args.host}_{i}.jpg"))
 

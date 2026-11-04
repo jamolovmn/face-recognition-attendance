@@ -157,6 +157,21 @@ client rewrites the camera's LAN service addresses to the tunnel address automat
 `probe --rtsp-port` does the same for RTSP. Install
 [Termux:Boot](https://f-droid.org/packages/com.termux.boot/) so the tunnel starts after a reboot.
 
+### Run on an office Windows PC (no Docker), with automatic failover
+
+Running the AI inside the office is often the better setup: video never leaves the LAN, no tunnel or port forwarding is needed, and only small events go out to Nextcloud over HTTPS.
+
+1. Copy the project to `C:\FaceAttendance` (no spaces in the path) and fill in `.env` with the cameras' LAN addresses.
+2. In PowerShell **as Administrator**:
+   ```powershell
+   cd C:\FaceAttendance
+   powershell -ExecutionPolicy Bypass -File windows\install.ps1
+   ```
+   It installs Python 3.12 (via winget) and the libraries, downloads the models, disables sleep on AC power and registers a `FaceAttendance` scheduled task that starts at boot without anyone logging in and restarts the service if it stops. Log: `data\attendance.log`.
+3. Probe and enroll the same way as with Docker, using `.venv\Scripts\python.exe -m attendance.probe ...` and `-m attendance.enroll`.
+
+**Two always-on PCs, one active.** Install on both, set `FAILOVER=true`, and give the main PC `NODE_PRIORITY=1` and the backup `NODE_PRIORITY=2`. Every node sends a heartbeat to the Nextcloud app every ~15 s and only the lease holder connects to the cameras. The standby node uses no camera bandwidth and almost no CPU. If the main PC goes silent for `LEASE_TTL_SEC` (45 s), the backup takes over. When the main PC comes back, it takes over again. If both run for a moment during a handover, Nextcloud drops the duplicate arrivals itself (same person, same room, within 2 minutes). Both PCs need the same `faces/` folder; run `enroll` on each.
+
 ## Configuration
 
 Everything is set through `.env`. [`.env.example`](.env.example) documents every variable. The most important ones:
@@ -186,9 +201,12 @@ POST /ocs/v2.php/apps/faceattendance/api/v1/events      (OCS-APIRequest: true, b
   "score": 0.71, "ts": 1790246135, "snapshot": "<base64 jpeg>" }
 
 GET  /ocs/v2.php/apps/faceattendance/api/v1/events?from=<unix>&to=<unix>[&person=][&room=]
+
+POST /ocs/v2.php/apps/faceattendance/api/v1/lease       (failover heartbeat)
+{ "node": "office-pc-1", "priority": 1, "ttl": 45 }  ->  { "leader": true, "holder": "office-pc-1", "until": ... }
 ```
 
-`uid` makes the POST idempotent, so retries never create duplicates. `person=` (empty) returns only strangers.
+`uid` makes the POST idempotent, so retries never create duplicates. The same person in the same room within 2 minutes is also stored only once. `person=` (empty) returns only strangers.
 
 ## Tips for accuracy
 
@@ -209,8 +227,10 @@ attendance/            Python service
   faces.py             YuNet + SFace (OpenCV)
   ptz.py / onvif.py    PTZ auto-tracking, dependency-free ONVIF client
   sink.py              Nextcloud client with offline spool
+  lease.py             active/standby failover between nodes
   enroll.py / probe.py CLI tools
 nextcloud-app/faceattendance/   Nextcloud app (PHP, vanilla JS, no build step)
+windows/               Windows installer (scheduled task, no Docker)
 ```
 
 ## License

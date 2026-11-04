@@ -63,4 +63,17 @@ class EventMapper extends QBMapper {
 			->setMaxResults($limit);
 		return $this->findEntities($qb);
 	}
+
+	public function findNear(string $person, string $room, int $ts, int $window): ?Event {
+		$qb = $this->db->getQueryBuilder();
+		$qb->select('*')->from($this->getTableName())
+			->where($qb->expr()->eq('person', $qb->createNamedParameter($person)))
+			->andWhere($qb->expr()->eq('room', $qb->createNamedParameter($room)))
+			->andWhere($qb->expr()->gt('ts', $qb->createNamedParameter($ts - $window, IQueryBuilder::PARAM_INT)))
+			->andWhere($qb->expr()->lt('ts', $qb->createNamedParameter($ts + $window, IQueryBuilder::PARAM_INT)))
+			->orderBy('ts', 'ASC')
+			->setMaxResults(1);
+		$events = $this->findEntities($qb);
+		return $events[0] ?? null;
+	}
 }

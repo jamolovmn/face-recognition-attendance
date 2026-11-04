@@ -106,6 +106,21 @@ docker compose logs -f
 
 Ofis provayder modemi orqasida bo'lsa va routerning VPN mijozi kiruvchi ulanishga ruxsat bermasa, ofis ichidagi doim yoqiq istalgan qurilma serverga **o'zi ulanib**, kamera portlarini SSH tunnel orqali uzatib turishi mumkin. Buning uchun [Termux](https://f-droid.org/packages/com.termux/) o'rnatilgan eski Android telefon kifoya. Telefon qayta yonganda tunnel o'zi ishga tushishi uchun [Termux:Boot](https://f-droid.org/packages/com.termux.boot/) ilovasini ham o'rnating. Serverda faqat shu portlarni ocha oladigan alohida foydalanuvchi yaratiladi (batafsil: [README.md](README.md)).
 
+### Ofisdagi Windows kompyuterda ishlatish (Docker'siz), avtomatik zaxira bilan
+
+AI'ni ofisning o'zida ishlatish ko'pincha yaxshiroq. Video ofis tarmog'idan chiqmaydi, tunnel ham, port ochish ham kerak bo'lmaydi. Nextcloud'ga HTTPS orqali faqat kichik hodisalar ketadi.
+
+1. Loyihani `C:\FaceAttendance` papkasiga ko'chiring (yo'lda bo'sh joy bo'lmasin). `.env` fayliga kameralarning ichki IP manzillarini yozing.
+2. PowerShell'ni **administrator sifatida** oching:
+   ```powershell
+   cd C:\FaceAttendance
+   powershell -ExecutionPolicy Bypass -File windows\install.ps1
+   ```
+   Skript Python 3.12 va kutubxonalarni o'rnatadi, modellarni yuklab oladi va kompyuterning uyqu rejimini o'chiradi. So'ng `FaceAttendance` vazifasini qo'shadi: kompyuter yonganda hech kim kirmasa ham servis o'zi ishga tushadi, to'xtab qolsa qayta yonadi. Log fayli: `data\attendance.log`.
+3. Kamerani tekshirish va xodimlarni qo'shish Docker'dagi kabi, faqat buyruqlar `.venv\Scripts\python.exe -m attendance.probe ...` va `-m attendance.enroll` bo'ladi.
+
+**2 ta doim yoqiq kompyuter, bittasi asosiy.** Dasturni ikkalasiga o'rnating va `.env`da `FAILOVER=true` qiling. Asosiy kompyuterga `NODE_PRIORITY=1`, zaxirasiga `NODE_PRIORITY=2` yozing. Har ikkalasi Nextcloud'ga ~15 soniyada "tirikman" signalini yuboradi, kameralarga esa faqat aktiv kompyuter ulanadi. Zaxira kompyuter kutib turadi: kamera trafigi yo'q, CPU deyarli 0. Asosiy kompyuter 45 soniya (`LEASE_TTL_SEC`) signal bermasa, ish zaxiraga o'tadi. Asosiy kompyuter qaytib yonsa, ishni yana o'zi oladi. Almashinuv paytida ikkalasi bir lahza birga ishlab qolsa ham, Nextcloud takror yozuvni o'zi tashlab yuboradi (bir odam, bir xona, 2 daqiqa ichida). Ikkala kompyuterda ham `faces/` papkasi bir xil bo'lsin, `enroll`ni har birida ishga tushiring.
+
 ## Sozlamalar
 
 Barcha sozlamalar `.env` faylida turadi, har biri [`.env.example`](.env.example) ichida izohlangan.

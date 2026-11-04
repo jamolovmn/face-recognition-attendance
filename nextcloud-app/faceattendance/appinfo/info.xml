@@ -5,7 +5,7 @@
 	<name>Face Attendance</name>
 	<summary>Employee attendance from face-recognition cameras</summary>
 	<description><![CDATA[Receives arrival events from the face-recognition-attendance service (IP / PTZ cameras + AI) and shows who came and left, when, and in which room. Daily summary, snapshots, stranger alerts, CSV export and automatic data retention.]]></description>
-	<version>1.0.0</version>
+	<version>1.1.0</version>
 	<licence>mit</licence>
 	<author homepage="https://github.com/jamolovmn">jamolovmn</author>
 	<namespace>FaceAttendance</namespace>

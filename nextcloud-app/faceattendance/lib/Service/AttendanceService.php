@@ -18,6 +18,8 @@ use Psr\Log\LoggerInterface;
 class AttendanceService {
 	public const GROUP = 'attendance';
 	private const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+	/** A person seen in the same room again within this window is the same arrival (failover overlap, retries). */
+	private const DUPLICATE_WINDOW_SEC = 120;
 
 	public function __construct(
 		private EventMapper $mapper,
@@ -41,6 +43,12 @@ class AttendanceService {
 		$existing = $this->mapper->findByUid($uid);
 		if ($existing !== null) {
 			return $existing; // the camera service retries - make it idempotent
+		}
+		if ($person !== null) {
+			$recent = $this->mapper->findNear($person, $room, $ts, self::DUPLICATE_WINDOW_SEC);
+			if ($recent !== null) {
+				return $recent; // two camera nodes briefly running at once during a failover
+			}
 		}
 
 		$event = new Event();
@@ -126,5 +134,31 @@ class AttendanceService {
 		} catch (NotFoundException) {
 			return $this->appData->newFolder('snapshots');
 		}
+	}
+
+	/**
+	 * Active/standby failover between several camera nodes: only the lease holder
+	 * runs the cameras. A node with a lower priority number takes the lease over
+	 * at once; others get it only after the holder stopped renewing it.
+	 *
+	 * @return array{leader: bool, holder: string, until: int}
+	 */
+	public function lease(string $node, int $priority, int $ttl): array {
+		$now = time();
+		$holder = $this->appConfig->getValueString(Application::APP_ID, 'lease_node', '', lazy: true);
+		$holderPriority = $this->appConfig->getValueInt(Application::APP_ID, 'lease_priority', PHP_INT_MAX, lazy: true);
+		$until = $this->appConfig->getValueInt(Application::APP_ID, 'lease_until', 0, lazy: true);
+
+		if ($holder === '' || $holder === $node || $until < $now || $priority < $holderPriority) {
+			if ($holder !== $node) {
+				$this->logger->info("faceattendance: camera node '$node' became active (was '$holder')");
+			}
+			$holder = $node;
+			$until = $now + $ttl;
+			$this->appConfig->setValueString(Application::APP_ID, 'lease_node', $node, lazy: true);
+			$this->appConfig->setValueInt(Application::APP_ID, 'lease_priority', $priority, lazy: true);
+			$this->appConfig->setValueInt(Application::APP_ID, 'lease_until', $until, lazy: true);
+		}
+		return ['leader' => $holder === $node, 'holder' => $holder, 'until' => $until];
 	}
 }

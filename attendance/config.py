@@ -2,7 +2,26 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass, field
+
+
+def load_dotenv(path: str = ".env") -> None:
+    """Read KEY=VALUE lines into the environment (Docker does this itself; needed on Windows)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -69,9 +88,9 @@ class Config:
     cameras: list[CameraConfig] = field(default_factory=list)
 
     # Models / recognition
-    models_dir: str = "/app/models"
-    gallery_path: str = "/app/data/gallery.npz"
-    faces_dir: str = "/app/faces"
+    models_dir: str = "models"
+    gallery_path: str = "data/gallery.npz"
+    faces_dir: str = "faces"
     detect_width: int = 1280
     detect_score: float = 0.8
     min_face_px: int = 40
@@ -108,12 +127,20 @@ class Config:
     nc_user: str = ""
     nc_app_password: str = ""
     nc_verify_tls: bool = True
-    spool_dir: str = "/app/data/spool"
+    spool_dir: str = "data/spool"
+
+    # Failover between several camera nodes (only one runs the cameras)
+    failover: bool = False
+    node_id: str = ""
+    node_priority: int = 1  # lower = preferred
+    lease_ttl_sec: float = 45.0
 
     log_level: str = "INFO"
+    log_file: str | None = None
 
 
 def load() -> Config:
+    load_dotenv()
     cam_ids = [c.strip() for c in (_env("CAMERAS", "") or "").split(",") if c.strip()]
     cameras: list[CameraConfig] = []
     for cid in cam_ids:
@@ -138,9 +165,9 @@ def load() -> Config:
 
     return Config(
         cameras=cameras,
-        models_dir=_env("MODELS_DIR", "/app/models"),
-        gallery_path=_env("GALLERY_PATH", "/app/data/gallery.npz"),
-        faces_dir=_env("FACES_DIR", "/app/faces"),
+        models_dir=_env("MODELS_DIR", "models"),
+        gallery_path=_env("GALLERY_PATH", "data/gallery.npz"),
+        faces_dir=_env("FACES_DIR", "faces"),
         detect_width=_int("DETECT_WIDTH", 1280),
         detect_score=_float("DETECT_SCORE", 0.8),
         min_face_px=_int("MIN_FACE_PX", 40),
@@ -169,6 +196,11 @@ def load() -> Config:
         nc_user=_env("NC_USER", "") or "",
         nc_app_password=_env("NC_APP_PASSWORD", "") or "",
         nc_verify_tls=_bool("NC_VERIFY_TLS", True),
-        spool_dir=_env("SPOOL_DIR", "/app/data/spool"),
+        spool_dir=_env("SPOOL_DIR", "data/spool"),
+        failover=_bool("FAILOVER", False),
+        node_id=_env("NODE_ID") or socket.gethostname(),
+        node_priority=_int("NODE_PRIORITY", 1),
+        lease_ttl_sec=_float("LEASE_TTL_SEC", 45.0),
         log_level=_env("LOG_LEVEL", "INFO"),
+        log_file=_env("LOG_FILE"),
     )

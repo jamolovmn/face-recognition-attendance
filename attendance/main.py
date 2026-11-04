@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import os
 import threading
 import time
@@ -20,6 +21,7 @@ from .camera import LatestFrameReader
 from .config import CameraConfig, Config
 from .faces import Face, FaceEngine, crop_snapshot
 from .gallery import Gallery
+from .lease import Lease
 from .ptz import PtzTracker
 from .sink import NextcloudSink
 
@@ -89,9 +91,9 @@ class Cooldowns:
 class CameraWorker(threading.Thread):
     UNKNOWN_SAME_PERSON = 0.50  # similarity above which two unknown faces are "the same stranger"
 
-    def __init__(self, cam: CameraConfig, cfg: Config, gallery: GalleryHolder, sink: NextcloudSink, cooldowns: Cooldowns):
+    def __init__(self, cam: CameraConfig, cfg: Config, gallery: GalleryHolder, sink: NextcloudSink, cooldowns: Cooldowns, lease: Lease):
         super().__init__(name=f"cam-{cam.id}", daemon=True)
-        self.cam, self.cfg = cam, cfg
+        self.cam, self.cfg, self.lease = cam, cfg, lease
         self.gallery, self.sink, self.cooldowns = gallery, sink, cooldowns
         # Main stream: only keyframes while idle, every frame while something happens.
         self.reader = LatestFrameReader(cam.id, cam.rtsp, full=not cfg.motion_gate)
@@ -233,16 +235,17 @@ class CameraWorker(threading.Thread):
         while True:
             t0 = time.monotonic()
 
-            if not in_schedule(self.cfg) and self.cfg.off_hours_mode == "off":
+            standby = not self.lease.is_leader()
+            if standby or (not in_schedule(self.cfg) and self.cfg.off_hours_mode == "off"):
                 if not paused:
-                    log.info("[%s] outside working hours - cameras disconnected", self.cam.id)
+                    log.info("[%s] %s - cameras disconnected", self.cam.id, "standby node" if standby else "outside working hours")
                     for r in self._readers():
                         r.pause()
                     paused = True
-                time.sleep(30)
+                time.sleep(5 if standby else 30)
                 continue
             if paused:
-                log.info("[%s] working hours - reconnecting", self.cam.id)
+                log.info("[%s] active - reconnecting", self.cam.id)
                 for r in self._readers():
                     r.resume()
                 paused = False
@@ -283,7 +286,11 @@ def in_schedule(cfg: Config, now: datetime | None = None) -> bool:
 
 def main() -> None:
     cfg = cfgmod.load()
-    logging.basicConfig(level=cfg.log_level.upper(), format="%(asctime)s %(levelname)-7s %(threadName)s: %(message)s")
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if cfg.log_file:  # Windows service: no console, a rotating file instead
+        os.makedirs(os.path.dirname(cfg.log_file) or ".", exist_ok=True)
+        handlers = [logging.handlers.RotatingFileHandler(cfg.log_file, maxBytes=5_000_000, backupCount=3, encoding="utf-8")]
+    logging.basicConfig(level=cfg.log_level.upper(), format="%(asctime)s %(levelname)-7s %(threadName)s: %(message)s", handlers=handlers)
     if not cfg.cameras:
         raise SystemExit("no cameras configured - set CAMERAS and CAM_<ID>_RTSP in .env")
     cv2.setNumThreads(max(1, (os.cpu_count() or 2) // max(1, len(cfg.cameras))))
@@ -291,8 +298,9 @@ def main() -> None:
     gallery = GalleryHolder(cfg.gallery_path)
     sink = NextcloudSink(cfg)
     cooldowns = Cooldowns()
+    lease = Lease(cfg)
     for cam in cfg.cameras:
-        CameraWorker(cam, cfg, gallery, sink, cooldowns).start()
+        CameraWorker(cam, cfg, gallery, sink, cooldowns, lease).start()
 
     while True:
         time.sleep(60)
