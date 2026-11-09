@@ -30,13 +30,29 @@ if ($Uninstall) {
     exit 0
 }
 
-function Find-Python {
-    foreach ($p in @("$env:ProgramFiles\Python312\python.exe", "$env:ProgramFiles\Python313\python.exe")) {
-        if (Test-Path $p) { return $p }
+function Test-Python($exe) {
+    # Other software may have put an old Python (e.g. 2.7) first in PATH
+    if (-not $exe -or -not (Test-Path $exe)) { return $false }
+    try {
+        $ok = & $exe -c "import sys; print(sys.version_info >= (3, 10))" 2>$null
+    } catch {
+        return $false
     }
-    # Skip the Microsoft Store stub in WindowsApps
-    $cmd = Get-Command python.exe -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1
-    if ($cmd) { return $cmd.Source }
+    return ($ok -eq 'True')
+}
+
+function Find-Python {
+    $candidates = @()
+    foreach ($v in '312', '313', '311', '310') {
+        $candidates += "$env:ProgramFiles\Python$v\python.exe"
+        $candidates += "$env:LOCALAPPDATA\Programs\Python\Python$v\python.exe"
+    }
+    # -All: look past the first match. WindowsApps holds only the Microsoft Store stub.
+    $candidates += Get-Command python.exe -All -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notlike '*WindowsApps*' } | ForEach-Object { $_.Source }
+    foreach ($p in $candidates) {
+        if (Test-Python $p) { return $p }
+    }
     return $null
 }
 
@@ -48,13 +64,16 @@ if (-not $python) {
         $python = Find-Python
     }
     if (-not $python) {
-        throw 'Python not found. Install Python 3.12 from https://www.python.org/downloads/windows/ ("Install for all users"), then run this script again.'
+        throw 'Python 3.10 or newer not found. Install Python 3.12 from https://www.python.org/downloads/windows/ ("Install for all users"), then run this script again.'
     }
 }
 Write-Host "      $python"
 
 Write-Host '[2/5] Libraries (a few minutes the first time)' -ForegroundColor Cyan
-if (-not (Test-Path '.venv\Scripts\python.exe')) { & $python -m venv .venv }
+if (-not (Test-Path '.venv\Scripts\python.exe')) {
+    & $python -m venv .venv
+    if ($LASTEXITCODE -ne 0) { throw 'could not create the Python environment (.venv)' }
+}
 $venv = Join-Path $Root '.venv\Scripts\python.exe'
 & $venv -m pip install --quiet --upgrade pip
 & $venv -m pip install --quiet -r requirements.txt
