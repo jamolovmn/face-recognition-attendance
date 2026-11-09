@@ -46,7 +46,7 @@ class ApiController extends OCSController {
 		$person = $person !== null ? trim($person) : null;
 		$event = $this->service->create(
 			$uid,
-			$person === '' ? null : mb_substr($person, 0, 128),
+			$person === null || $person === '' ? null : mb_substr($person, 0, 128),
 			mb_substr($camera, 0, 64),
 			mb_substr($room, 0, 128),
 			$score,
