@@ -18,6 +18,7 @@ import os
 import queue
 import threading
 import time
+from collections import Counter
 from datetime import datetime
 
 import cv2
@@ -31,25 +32,26 @@ from .webdav import WebDav
 log = logging.getLogger(__name__)
 
 
-def face_quality(frame: np.ndarray, row: np.ndarray, min_px: int, min_sharpness: float) -> float | None:
-    """Sharpness of a clear, frontal, fully visible face; None if the photo is not good enough."""
+def reject_reason(frame: np.ndarray, row: np.ndarray, cfg: Config) -> str | None:
+    """Why this face is not a good enrolment photo; None if it is clear and frontal enough."""
     x, y, w, h = (float(v) for v in row[:4])
     H, W = frame.shape[:2]
-    if min(w, h) < min_px or row[14] < 0.9:
-        return None
+    if min(w, h) < cfg.collect_min_face_px:
+        return "small"
+    if row[14] < cfg.collect_min_score:
+        return "low_score"
     if x < 0 or y < 0 or x + w > W or y + h > H:
-        return None  # cut off by the frame edge
+        return "cut_off"
     (rx, ry), (lx, ly), (nx, _) = row[4:6], row[6:8], row[8:10]
     eye_dist = math.hypot(lx - rx, ly - ry)
-    if eye_dist < 0.3 * w:
-        return None  # profile
-    if abs(nx - (rx + lx) / 2) > 0.2 * eye_dist:
-        return None  # head turned
+    if eye_dist < 0.25 * w or abs(nx - (rx + lx) / 2) > cfg.collect_max_turn * eye_dist:
+        return "turned"
     if abs(math.degrees(math.atan2(ly - ry, lx - rx))) > 20:
-        return None  # head tilted
+        return "tilted"
     face = cv2.cvtColor(frame[int(y):int(y + h), int(x):int(x + w)], cv2.COLOR_BGR2GRAY)
-    sharpness = float(cv2.Laplacian(cv2.resize(face, (112, 112)), cv2.CV_64F).var())
-    return sharpness if sharpness >= min_sharpness else None
+    if cv2.Laplacian(cv2.resize(face, (112, 112)), cv2.CV_64F).var() < cfg.collect_min_sharpness:
+        return "blurry"
+    return None
 
 
 class FolderMirror:
@@ -141,14 +143,26 @@ class FaceCollector:
         self._last_add: dict[str, float] = {}
         self._cache: dict[tuple[str, float], np.ndarray | None] = {}
         self._q: queue.Queue = queue.Queue(maxsize=100)
+        self._stats: Counter = Counter()
+        self._biggest = 0
+        self._stats_at = time.monotonic()
         os.makedirs(local_dir, exist_ok=True)
         threading.Thread(target=self._writer, name="collector", daemon=True).start()
 
     def offer(self, frame: np.ndarray, row: np.ndarray, embedding: np.ndarray) -> None:
         """Called by camera threads for every unknown face (cheap when the photo is rejected)."""
-        if face_quality(frame, row, self.cfg.collect_min_face_px, self.cfg.collect_min_sharpness) is None:
-            return
+        reason = reject_reason(frame, row, self.cfg)
         now = time.monotonic()
+        with self._lock:
+            self._stats[reason or "ok"] += 1
+            self._biggest = max(self._biggest, int(min(row[2], row[3])))
+            if now - self._stats_at >= 60:
+                log.info("photo filter, last minute: %s (biggest face %d px)", dict(self._stats), self._biggest)
+                self._stats.clear()
+                self._biggest = 0
+                self._stats_at = now
+        if reason is not None:
+            return
         with self._lock:
             best, best_sim = None, 0.0
             for folder, embs in self._groups.items():

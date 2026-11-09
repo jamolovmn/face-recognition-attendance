@@ -125,7 +125,9 @@ class Config:
     # Automatic photo collection of unknown people + people folder in Nextcloud
     collect_faces: bool = False
     collect_per_person: int = 20
-    collect_min_face_px: int = 80
+    collect_min_face_px: int = 60
+    collect_min_score: float = 0.8
+    collect_max_turn: float = 0.35  # nose offset from the eye midpoint, in eye distances
     collect_min_sharpness: float = 50.0
     new_faces_dir: str = "data/new_faces"
     nc_people_dir: str | None = None  # e.g. "Attendance/People"; mirrored into faces_dir
@@ -204,7 +206,9 @@ def load() -> Config:
         ptz_idle_return_sec=_float("PTZ_IDLE_RETURN_SEC", 20.0),
         collect_faces=_bool("COLLECT_FACES", False),
         collect_per_person=_int("COLLECT_PER_PERSON", 20),
-        collect_min_face_px=_int("COLLECT_MIN_FACE_PX", 80),
+        collect_min_face_px=_int("COLLECT_MIN_FACE_PX", 60),
+        collect_min_score=_float("COLLECT_MIN_SCORE", 0.8),
+        collect_max_turn=_float("COLLECT_MAX_TURN", 0.35),
         collect_min_sharpness=_float("COLLECT_MIN_SHARPNESS", 50.0),
         new_faces_dir=_env("NEW_FACES_DIR", "data/new_faces"),
         nc_people_dir=_env("NC_PEOPLE_DIR"),
